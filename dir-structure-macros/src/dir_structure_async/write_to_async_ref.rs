@@ -91,18 +91,27 @@ pub(super) fn expand_dir_structure_for_field(
             }
             None => {
                 async_write_ref_future.clauses_ref_vfs = true;
+                let write_to_async_ref_bound: WherePredicate = parse_quote! {
+                    #actual_field_ty_perform: ::dir_structure::traits::asy::WriteToAsyncRef<'vfs, Vfs>
+                };
+                let fut_clause = quote! {
+                    <#actual_field_ty_perform as ::dir_structure::traits::asy::WriteToAsyncRef<'vfs, Vfs>>::Future<'fut>: ::std::future::Future<Output = ::dir_structure::error::VfsResult<(), Vfs>> + ::std::marker::Unpin + 'fut
+                };
                 let bound = vec![
+                    write_to_async_ref_bound.clone(),
                     parse_quote! {
-                        for<'trivial> #actual_field_ty_perform: ::dir_structure::traits::asy::WriteToAsyncRef<'vfs, Vfs>
-                    },
-                    parse_quote! {
-                        for<'trivial> <#actual_field_ty_perform as ::dir_structure::traits::asy::WriteToAsyncRef<'vfs, Vfs>>::Future<'fut>: ::std::future::Future<Output = ::dir_structure::error::VfsResult<(), Vfs>> + ::std::marker::Send + ::std::marker::Unpin + 'fut
+                        for<'fut> #fut_clause
                     },
                 ];
-                async_write_ref_future.clauses.extend(bound.clone());
-                async_write_ref_future.clauses.push(parse_quote! {
-                    'vfs: 'fut
-                });
+                async_write_ref_future.clauses.extend([
+                    write_to_async_ref_bound,
+                    parse_quote! {
+                        #fut_clause
+                    },
+                    parse_quote! {
+                        'vfs: 'fut
+                    },
+                ]);
 
                 (
                     quote! {
