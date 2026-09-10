@@ -477,6 +477,125 @@ where
     }
 }
 
+#[cfg(feature = "async")]
+#[cfg_attr(docsrs, doc(cfg(feature = "async")))]
+#[pin_project(project_replace = DeferredReadOrOwnWriteRefFutureProj)]
+#[doc(hidden)]
+pub enum DeferredReadOrOwnWriteRefFuture<
+    'r,
+    'a,
+    T,
+    Vfs: WriteSupportingVfsAsync + 'r,
+    const CHECK_ON_READ: bool,
+> where
+    'r: 'a,
+    T: WriteToAsyncRef<'r, Vfs> + Send + 'static,
+    T: for<'b> ReadFromAsync<'b, Vfs> + for<'b> WriteToAsync<'b, Vfs> + Send + 'static,
+    for<'b> <T as ReadFromAsync<'b, Vfs>>::Future: Future<Output = VfsResult<T, Vfs>> + Unpin + 'b,
+    for<'b> <T as WriteToAsync<'b, Vfs>>::Future: Future<Output = VfsResult<(), Vfs>> + Unpin + 'b,
+{
+    Poisson,
+    Own {
+        inner: <T as WriteToAsyncRef<'r, Vfs>>::Future<'a>,
+    },
+    Deferred {
+        inner: <DeferredRead<'r, T, Vfs, CHECK_ON_READ> as WriteToAsyncRef<'r, Vfs>>::Future<'a>,
+    },
+}
+
+// needed to avoid ICE in rustdoc, see https://github.com/rust-lang/rust/issues/144918
+#[cfg(all(feature = "async", doc))]
+impl<'r, 'a, T, Vfs, const CHECK_ON_READ: bool> core::marker::Unpin
+    for DeferredReadOrOwnWriteRefFutureProj<'r, 'a, T, Vfs, CHECK_ON_READ>
+where
+    'r: 'a,
+    T: WriteToAsyncRef<'r, Vfs> + Send + 'static,
+    T: for<'b> ReadFromAsync<'b, Vfs> + for<'b> WriteToAsync<'b, Vfs> + Send + 'static,
+    for<'b> <T as ReadFromAsync<'b, Vfs>>::Future: Future<Output = VfsResult<T, Vfs>> + Unpin + 'b,
+    for<'b> <T as WriteToAsync<'b, Vfs>>::Future: Future<Output = VfsResult<(), Vfs>> + Unpin + 'b,
+    Vfs: WriteSupportingVfsAsync + 'r,
+{
+}
+
+#[cfg(feature = "async")]
+#[cfg_attr(docsrs, doc(cfg(feature = "async")))]
+impl<'r, 'a, const CHECK_ON_READ: bool, T, Vfs: WriteSupportingVfsAsync + 'r> Future
+    for DeferredReadOrOwnWriteRefFuture<'r, 'a, T, Vfs, CHECK_ON_READ>
+where
+    'r: 'a,
+    T: WriteToAsyncRef<'r, Vfs> + Send + 'static,
+    T: for<'b> ReadFromAsync<'b, Vfs> + for<'b> WriteToAsync<'b, Vfs> + Send + 'static,
+    for<'b> <T as ReadFromAsync<'b, Vfs>>::Future: Future<Output = VfsResult<T, Vfs>> + Unpin + 'b,
+    for<'b> <T as WriteToAsync<'b, Vfs>>::Future: Future<Output = VfsResult<(), Vfs>> + Unpin + 'b,
+{
+    type Output = VfsResult<(), Vfs>;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.as_mut().project_replace(Self::Poisson);
+        match this {
+            DeferredReadOrOwnWriteRefFutureProj::Own { mut inner } => {
+                match Pin::new(&mut inner).poll(cx) {
+                    Poll::Ready(v) => Poll::Ready(v),
+                    Poll::Pending => {
+                        self.project_replace(Self::Own { inner });
+                        Poll::Pending
+                    }
+                }
+            }
+            DeferredReadOrOwnWriteRefFutureProj::Deferred { mut inner } => {
+                match Pin::new(&mut inner).poll(cx) {
+                    Poll::Ready(v) => Poll::Ready(v),
+                    Poll::Pending => {
+                        self.project_replace(Self::Deferred { inner });
+                        Poll::Pending
+                    }
+                }
+            }
+            DeferredReadOrOwnWriteRefFutureProj::Poisson => {
+                panic!(
+                    "DeferredReadOrOwnWriteRefFuture is in an invalid state. This is a bug in the code."
+                );
+            }
+        }
+    }
+}
+
+#[cfg(feature = "async")]
+#[cfg_attr(docsrs, doc(cfg(feature = "async")))]
+impl<'r, const CHECK_ON_READ: bool, T, Vfs: WriteSupportingVfsAsync + 'r> WriteToAsyncRef<'r, Vfs>
+    for DeferredReadOrOwn<'r, T, Vfs, CHECK_ON_READ>
+where
+    T: WriteToAsyncRef<'r, Vfs> + Send + 'static,
+    T: for<'b> ReadFromAsync<'b, Vfs> + for<'b> WriteToAsync<'b, Vfs> + Send + 'static,
+    for<'b> <T as ReadFromAsync<'b, Vfs>>::Future: Future<Output = VfsResult<T, Vfs>> + Unpin + 'b,
+    for<'b> <T as WriteToAsync<'b, Vfs>>::Future: Future<Output = VfsResult<(), Vfs>> + Unpin + 'b,
+{
+    type Future<'a>
+        = DeferredReadOrOwnWriteRefFuture<'r, 'a, T, Vfs, CHECK_ON_READ>
+    where
+        Self: 'a,
+        'r: 'a,
+        Vfs: 'a;
+
+    fn write_to_async_ref<'a>(
+        &'a self,
+        path: <<Vfs as VfsCore>::Path as PathType>::OwnedPath,
+        vfs: Pin<&'a Vfs>,
+    ) -> Self::Future<'a>
+    where
+        'r: 'a,
+    {
+        match self {
+            DeferredReadOrOwn::Own(own) => DeferredReadOrOwnWriteRefFuture::Own {
+                inner: own.write_to_async_ref(path, vfs),
+            },
+            DeferredReadOrOwn::Deferred(d) => DeferredReadOrOwnWriteRefFuture::Deferred {
+                inner: d.write_to_async_ref(path, vfs),
+            },
+        }
+    }
+}
+
 #[cfg(feature = "resolve-path")]
 #[cfg_attr(docsrs, doc(cfg(feature = "resolve-path")))]
 impl<'a, const CHECK_ON_READ: bool, const NAME: [char; HAS_FIELD_MAX_LEN], T, Vfs> HasField<NAME>
