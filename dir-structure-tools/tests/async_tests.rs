@@ -89,6 +89,41 @@ async fn deferred_read() {
     assert_eq!(dir.f.perform_read_async().await.unwrap(), "f1");
 }
 
+/// `DeferredReadOrOwn` 的 `WriteToAsyncRef`：Deferred 状态异路径写出读取源文件落盘，
+/// Own 状态直接落盘。
+#[tokio::test]
+async fn deferred_read_or_own_write_to_async_ref() {
+    use dir_structure_tools::deferred_read::DeferredRead;
+    use dir_structure_tools::deferred_read_or_own::DeferredReadOrOwn;
+    use std::fs;
+
+    let p = test_dir("deferred_read_or_own_write_to_async_ref");
+    let d = p.join("dir");
+    fs::create_dir_all(&d).unwrap();
+    fs::write(d.join("f1.txt"), "f1").unwrap();
+
+    let vfs = TokioFsVfs;
+
+    // Deferred 状态：异路径写出读取源文件并落盘。
+    let deferred = DeferredReadOrOwn::<String, TokioFsVfs>::Deferred(
+        DeferredRead::read_from_async(d.join("f1.txt"), Pin::new(&vfs))
+            .await
+            .unwrap(),
+    );
+    deferred
+        .write_to_async_ref(d.join("out1.txt"), Pin::new(&vfs))
+        .await
+        .unwrap();
+    assert_eq!(fs::read_to_string(d.join("out1.txt")).unwrap(), "f1");
+
+    // Own 状态：不读取磁盘，直接落盘。
+    DeferredReadOrOwn::<String, TokioFsVfs>::Own("f2".to_owned())
+        .write_to_async_ref(d.join("out2.txt"), Pin::new(&vfs))
+        .await
+        .unwrap();
+    assert_eq!(fs::read_to_string(d.join("out2.txt")).unwrap(), "f2");
+}
+
 #[tokio::test]
 async fn read_all_directory_files() {
     #[derive(dir_structure::DirStructureAsync)]
