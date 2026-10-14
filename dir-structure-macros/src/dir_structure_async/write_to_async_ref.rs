@@ -91,11 +91,9 @@ pub(super) fn expand_dir_structure_for_field(
             }
             None => {
                 async_write_ref_future.clauses_ref_vfs = true;
-                let bound = vec![
-                    parse_quote! {
-                        #actual_field_ty_perform: ::dir_structure::traits::asy::WriteToAsyncRef<'vfs, Vfs>
-                    },
-                ];
+                let bound = vec![parse_quote! {
+                    #actual_field_ty_perform: ::dir_structure::traits::asy::WriteToAsyncRef<'vfs, Vfs>
+                }];
                 async_write_ref_future.clauses.extend(bound.clone());
                 async_write_ref_future.clauses.push(parse_quote! {
                     <#actual_field_ty_perform as ::dir_structure::traits::asy::WriteToAsyncRef<'vfs, Vfs>>::Future<'fut>: ::std::future::Future<Output = ::dir_structure::error::VfsResult<(), Vfs>> + ::std::marker::Unpin + 'fut
